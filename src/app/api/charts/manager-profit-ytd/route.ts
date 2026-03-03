@@ -1,29 +1,102 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 
+type Period = 'lastDay' | 'month' | 'quarter' | 'ytd';
+
+function getDateRangeFromAnchor(anchorDate: string, period: Period): { dateFrom: string; dateTo: string } | null {
+  const [y, m, d] = anchorDate.split('-').map(Number);
+  const month0 = (m ?? 1) - 1;
+  const year = y ?? new Date().getFullYear();
+
+  if (period === 'month') {
+    const firstDay = new Date(year, month0, 1);
+    const lastDay = new Date(year, month0 + 1, 0);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return {
+      dateFrom: `${year}-${pad(month0 + 1)}-01`,
+      dateTo: `${year}-${pad(month0 + 1)}-${pad(lastDay.getDate())}`,
+    };
+  }
+  if (period === 'quarter') {
+    const q = Math.floor(month0 / 3) + 1;
+    const firstMonth = (q - 1) * 3;
+    const lastDay = new Date(year, firstMonth + 3, 0);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return {
+      dateFrom: `${year}-${pad(firstMonth + 1)}-01`,
+      dateTo: `${year}-${pad(firstMonth + 3)}-${pad(lastDay.getDate())}`,
+    };
+  }
+  if (period === 'ytd') {
+    return {
+      dateFrom: `${year}-01-01`,
+      dateTo: anchorDate,
+    };
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const uploadId = searchParams.get('uploadId');
+  const period = (searchParams.get('period') || 'ytd') as Period;
   if (!uploadId) {
     return NextResponse.json({ error: 'uploadId required' }, { status: 400 });
   }
 
   try {
-    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
+    const maxDateRows = await query<{ max_date: string | null }>(
+      `SELECT TO_CHAR(MAX(deal_date), 'YYYY-MM-DD') AS max_date
+       FROM deals WHERE upload_id = $1 AND deal_date IS NOT NULL
+         AND (status IS NULL OR LOWER(status) NOT LIKE '%cancelled%')`,
+      [uploadId]
+    );
+    const maxDate = maxDateRows[0]?.max_date;
+
+    if (!maxDate) {
+      return NextResponse.json({
+        managers: [],
+        totalMargin: 0,
+        nonImportMargin: 0,
+        nonImportFx: 0,
+        totalFx: 0,
+      });
+    }
+
+    let dateFrom: string;
+    let dateTo: string;
+
+    if (period === 'lastDay') {
+      dateFrom = maxDate;
+      dateTo = maxDate;
+    } else {
+      const range = getDateRangeFromAnchor(maxDate, period);
+      if (!range) {
+        return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
+      }
+      dateFrom = range.dateFrom;
+      dateTo = range.dateTo;
+    }
 
     const rows = await query<Record<string, unknown>>(
-      `SELECT id, set_id, side, manager, deal_date, vendor_supplier,
-        amount_received_usd,
-        trade_contract_margin_usd,
-        pct_margin,
-        fx
-      FROM deals
-      WHERE upload_id = $1
-        AND (status IS NULL OR LOWER(status) NOT LIKE '%cancelled%')
-        AND deal_date >= $2::date`,
-      [uploadId, yearStart]
+      `SELECT d.id, d.set_id, d.side, d.manager, d.deal_date, d.vendor_supplier,
+        d.amount_received_usd,
+        d.trade_contract_margin_usd,
+        d.pct_margin,
+        d.fx,
+        c."group"
+      FROM deals d
+      LEFT JOIN clients c ON c.upload_id = d.upload_id
+        AND UPPER(TRIM(c.company_name)) = UPPER(TRIM(d.vendor_supplier))
+      WHERE d.upload_id = $1
+        AND (d.status IS NULL OR LOWER(d.status) NOT LIKE '%cancelled%')
+        AND d.deal_date >= $2::date
+        AND d.deal_date <= $3::date`,
+      [uploadId, dateFrom, dateTo]
     );
 
+    // TOTAL MARGIN: сумма положительной маржи по IMPORT и по EXPORT (и всем сторонам)
+    let totalMargin = 0;
     // NON IMPORT MARGIN: сумма положительных TRADE CONTRACT MARGIN USD где SIDE <> IMPORT
     let nonImportMargin = 0;
     // NON IMPORT FX: сумма TOTAL FX TRADING PNL USD где SIDE <> IMPORT
@@ -47,6 +120,9 @@ export async function GET(request: NextRequest) {
       if (['EXPORT', 'AGENT', 'FOREX'].includes(side)) {
         setExportAgentBrokerMargin.set(sid, (setExportAgentBrokerMargin.get(sid) ?? 0) + margin);
       }
+      if (margin > 0) {
+        totalMargin += margin;
+      }
       if (side !== 'IMPORT' && margin > 0) {
         nonImportMargin += margin;
       }
@@ -56,10 +132,11 @@ export async function GET(request: NextRequest) {
       totalFx += Number(r.fx) || 0;
     }
 
-    // Per-manager aggregates + deal details (only IMPORT deals)
+    // Per-manager -> per-group aggregates (only IMPORT deals)
     const managerData = new Map<
       string,
-      { importVolume: number; margin: number; fundingCost: number; fx: number; deals: Array<{
+      Map<string, { importVolume: number; margin: number; fundingCost: number; fx: number; deals: Array<{
+        group: string | null;
         vendor_supplier: string;
         deal_date: string | null;
         importVolume: number;
@@ -70,6 +147,7 @@ export async function GET(request: NextRequest) {
         pctProfit: number | null;
         fx: number | null;
       }> }
+    >
     >();
 
     for (const r of rows) {
@@ -82,9 +160,10 @@ export async function GET(request: NextRequest) {
       const setId = Number(r.set_id) || 0;
       const dealDate = r.deal_date ? String(r.deal_date).slice(0, 10) : null;
       const vendorSupplier = String(r.vendor_supplier ?? '').trim() || '—';
-      // %MARGIN из колонки Z — Excel хранит проценты как десятичные (1% = 0.01), умножаем на 100 для отображения
-      const pctMarginRaw = r.pct_margin != null ? Number(r.pct_margin) : null;
-      const pctMargin = pctMarginRaw != null ? pctMarginRaw * 100 : null;
+      const group = r.group != null ? String(r.group).trim() || null : null;
+      const groupKey = group ?? '—';
+      // %CONTRACT MARGIN = (margin / importVolume) * 100
+      const pctMargin = received !== 0 ? (margin / received) * 100 : null;
       const fx = r.fx != null ? Number(r.fx) : null;
 
       const setImport = setImportTotal.get(setId) ?? 0;
@@ -99,18 +178,14 @@ export async function GET(request: NextRequest) {
       const dealProfit = margin + fundingCost + infrastructureCost;
       const pctProfit = received !== 0 ? (dealProfit / received) * 100 : null;
 
-      const cur = managerData.get(manager) ?? {
-        importVolume: 0,
-        margin: 0,
-        fundingCost: 0,
-        fx: 0,
-        deals: [],
-      };
-      cur.importVolume += received;
-      cur.margin += margin;
-      cur.fundingCost += fundingCost;
-      cur.fx += fx ?? 0;
-      cur.deals.push({
+      const mgrMap = managerData.get(manager) ?? new Map();
+      const grp = mgrMap.get(groupKey) ?? { importVolume: 0, margin: 0, fundingCost: 0, fx: 0, deals: [] };
+      grp.importVolume += received;
+      grp.margin += margin;
+      grp.fundingCost += fundingCost;
+      grp.fx += fx ?? 0;
+      grp.deals.push({
+        group,
         vendor_supplier: vendorSupplier,
         deal_date: dealDate,
         importVolume: Math.round(received * 100) / 100,
@@ -121,27 +196,54 @@ export async function GET(request: NextRequest) {
         pctProfit: pctProfit != null ? Math.round(pctProfit * 100) / 100 : null,
         fx: fx != null ? Math.round(fx * 100) / 100 : null,
       });
-      managerData.set(manager, cur);
+      mgrMap.set(groupKey, grp);
+      managerData.set(manager, mgrMap);
     }
 
-    const result = Array.from(managerData.entries()).map(([manager, d]) => {
+    const result = Array.from(managerData.entries()).map(([manager, groupMap]) => {
+      let dImportVolume = 0;
+      let dMargin = 0;
+      let dFundingCost = 0;
+      let dFx = 0;
+      const groups = Array.from(groupMap.entries()).map(([groupKey, g]) => {
+        const infrastructureCost = 0;
+        const dealProfit = g.margin + g.fundingCost + infrastructureCost;
+        const pctProfit = g.importVolume !== 0 ? (dealProfit / g.importVolume) * 100 : null;
+        const pctMargin = g.importVolume !== 0 ? (g.margin / g.importVolume) * 100 : null;
+        dImportVolume += g.importVolume;
+        dMargin += g.margin;
+        dFundingCost += g.fundingCost;
+        dFx += g.fx;
+        return {
+          group: groupKey === '—' ? null : groupKey,
+          importVolume: Math.round(g.importVolume * 100) / 100,
+          pctMargin: pctMargin != null ? Math.round(pctMargin * 100) / 100 : null,
+          margin: Math.round(g.margin * 100) / 100,
+          fundingCost: Math.round(g.fundingCost * 100) / 100,
+          infrastructureCost: 0,
+          dealProfit: Math.round(dealProfit * 100) / 100,
+          pctProfit: pctProfit != null ? Math.round(pctProfit * 100) / 100 : null,
+          fx: Math.round(g.fx * 100) / 100,
+          deals: g.deals.sort((a, b) => (a.deal_date ?? '').localeCompare(b.deal_date ?? '')),
+        };
+      });
+      groups.sort((a, b) => (a.group ?? '—').localeCompare(b.group ?? '—'));
       const infrastructureCost = 0;
-      const dealProfit = d.margin + d.fundingCost + infrastructureCost;
-      const pctProfit = d.importVolume !== 0 ? (dealProfit / d.importVolume) * 100 : null;
-      // %MARGIN = TRADE CONTRACT MARGIN / AMOUNT TO BE RECEIVED USD
-      const pctMargin = d.importVolume !== 0 ? (d.margin / d.importVolume) * 100 : null;
+      const dealProfit = dMargin + dFundingCost + infrastructureCost;
+      const pctProfit = dImportVolume !== 0 ? (dealProfit / dImportVolume) * 100 : null;
+      const pctMargin = dImportVolume !== 0 ? (dMargin / dImportVolume) * 100 : null;
 
       return {
         manager,
-        importVolume: Math.round(d.importVolume * 100) / 100,
+        importVolume: Math.round(dImportVolume * 100) / 100,
         pctMargin: pctMargin != null ? Math.round(pctMargin * 100) / 100 : null,
-        margin: Math.round(d.margin * 100) / 100,
-        fundingCost: Math.round(d.fundingCost * 100) / 100,
+        margin: Math.round(dMargin * 100) / 100,
+        fundingCost: Math.round(dFundingCost * 100) / 100,
         infrastructureCost,
         dealProfit: Math.round(dealProfit * 100) / 100,
         pctProfit: pctProfit != null ? Math.round(pctProfit * 100) / 100 : null,
-        fx: Math.round(d.fx * 100) / 100,
-        deals: d.deals.sort((a, b) => (a.deal_date ?? '').localeCompare(b.deal_date ?? '')),
+        fx: Math.round(dFx * 100) / 100,
+        groups,
       };
     });
 
@@ -150,6 +252,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       managers: result,
+      totalMargin: Math.round(totalMargin * 100) / 100,
       nonImportMargin: Math.round(nonImportMargin * 100) / 100,
       nonImportFx: Math.round(nonImportFx * 100) / 100,
       totalFx: Math.round(totalFx * 100) / 100,

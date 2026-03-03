@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:init": "psql $DATABASE_URL -f src/lib/schema.sql",
+    "db:migrate": "node --env-file=.env scripts/migrate.mjs",
     "db:clear": "node scripts/clear-db.mjs"
   },
   "dependencies": {

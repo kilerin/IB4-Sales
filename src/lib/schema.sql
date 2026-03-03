@@ -16,11 +16,13 @@ CREATE TABLE IF NOT EXISTS clients (
   upload_id INTEGER NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
   company_name VARCHAR(255) NOT NULL,
   "group" VARCHAR(100),
+  type VARCHAR(100),
   manager VARCHAR(100),
   UNIQUE(upload_id, company_name)
 );
 
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS "group" VARCHAR(100);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS type VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS deals (
   id SERIAL PRIMARY KEY,
@@ -41,6 +43,8 @@ CREATE TABLE IF NOT EXISTS deals (
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS set_id INTEGER;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS pct_margin DECIMAL(10,4);
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS fx DECIMAL(20,4);
+-- type берётся из CLIENTS, не из deals
+ALTER TABLE deals DROP COLUMN IF EXISTS type;
 CREATE INDEX IF NOT EXISTS idx_deals_upload_date ON deals(upload_id, deal_date);
 CREATE INDEX IF NOT EXISTS idx_deals_upload_side ON deals(upload_id, side);
 CREATE INDEX IF NOT EXISTS idx_deals_upload_manager ON deals(upload_id, manager);

@@ -31,9 +31,9 @@ export async function POST(request: NextRequest) {
 
     for (const c of clients) {
       await query(
-        `INSERT INTO clients (upload_id, company_name, "group", manager) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (upload_id, company_name) DO UPDATE SET "group" = EXCLUDED."group", manager = EXCLUDED.manager`,
-        [uploadId, c.company_name, c.group ?? null, c.manager]
+        `INSERT INTO clients (upload_id, company_name, "group", type, manager) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (upload_id, company_name) DO UPDATE SET "group" = EXCLUDED."group", type = EXCLUDED.type, manager = EXCLUDED.manager`,
+        [uploadId, c.company_name, c.group ?? null, c.type ?? null, c.manager]
       );
     }
 

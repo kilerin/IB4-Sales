@@ -19,6 +19,7 @@ export interface ParsedDeal {
 export interface ParsedClient {
   company_name: string;
   group: string | null;
+  type: string | null;
   manager: string | null;
 }
 
@@ -63,8 +64,8 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
 
   const dealsSheet = wb.Sheets['DEALS'] || wb.Sheets['Deals'] || wb.Sheets[wb.SheetNames[0]];
   if (dealsSheet) {
-    const arr = XLSX.utils.sheet_to_json<Record<string, unknown>>(dealsSheet, { header: 1, defval: null });
-    const header = (arr[0] as unknown[]) || [];
+    const arr = XLSX.utils.sheet_to_json(dealsSheet, { header: 1, defval: null }) as unknown[][];
+    const header = (arr[0] ?? []) as unknown[];
     const statusIdx = header.findIndex((h) => String(h).toLowerCase().includes('status'));
     const sideIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('SIDE'));
     const dateIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('DEAL DATE'));
@@ -136,10 +137,11 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
 
   const clientsSheet = wb.Sheets['CLIENTS'] || wb.Sheets['Clients'] || wb.Sheets[wb.SheetNames.find((n) => /client/i.test(n)) ?? wb.SheetNames[0]];
   if (clientsSheet) {
-    const arr = XLSX.utils.sheet_to_json<Record<string, unknown>>(clientsSheet, { header: 1, defval: null });
-    const header = (arr[0] as unknown[]) || [];
+    const arr = XLSX.utils.sheet_to_json(clientsSheet, { header: 1, defval: null }) as unknown[][];
+    const header = (arr[0] ?? []) as unknown[];
     const companyIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('COMPANY NAME'));
     const groupIdx = header.findIndex((h) => h && String(h).toUpperCase() === 'GROUP');
+    const typeIdx = header.findIndex((h) => h && (String(h).toUpperCase() === 'TYPE' || String(h).toUpperCase().includes('DEAL TYPE')));
     const managerIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('MANAGER'));
 
     for (let i = 1; i < arr.length; i++) {
@@ -148,8 +150,9 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
       const company = toString(row[companyIdx]);
       const manager = toString(row[managerIdx]);
       const group = toString(row[groupIdx]);
+      const type = typeIdx >= 0 ? toString(row[typeIdx]) : null;
       if (!company) continue;
-      clients.push({ company_name: company, group, manager });
+      clients.push({ company_name: company, group, type, manager });
     }
   }
 
