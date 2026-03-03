@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, Fragment } from 'react';
+import { signOut } from 'next-auth/react';
 import * as XLSX from 'xlsx';
 import {
   BarChart,
@@ -427,9 +428,18 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 p-6 font-sans">
-      <header className="mb-8">
-        <h1 className="text-2xl font-bold text-amber-400">IB4 Sales Dashboard</h1>
-        <p className="text-slate-400 text-sm mt-1">Загрузка Excel, история и графики</p>
+      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-amber-400">IB4 Sales Dashboard</h1>
+          <p className="text-slate-400 text-sm mt-1">Загрузка Excel, история и графики</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => signOut({ callbackUrl: '/login' })}
+          className="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm"
+        >
+          Выйти
+        </button>
       </header>
 
       <section className="mb-8 flex flex-wrap items-end gap-4">

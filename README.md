@@ -27,12 +27,23 @@ createdb ib4sales
 
 ```
 DATABASE_URL=postgres://user:password@localhost:5432/ib4sales
+NEXTAUTH_SECRET=ваш-секрет-минимум-32-символа
+NEXTAUTH_URL=http://localhost:3000
 ```
 
-3. Примените схему:
+Сгенерировать секрет: `openssl rand -base64 32`
+
+3. Примените схему и миграции:
 
 ```bash
 npm run db:init
+npm run db:migrate
+```
+
+4. Создайте первого пользователя:
+
+```bash
+npm run db:create-user admin ваш_пароль
 ```
 
 ## Запуск

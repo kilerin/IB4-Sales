@@ -10,6 +10,15 @@ const pool = new pg.Pool({
 });
 
 try {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  console.log('Users table ready');
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS type VARCHAR(100)`);
   console.log('Added type column to clients');
   await pool.query(`ALTER TABLE deals DROP COLUMN IF EXISTS type`);

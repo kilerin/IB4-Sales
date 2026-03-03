@@ -1,6 +1,13 @@
 -- IB4Sales Dashboard - PostgreSQL Schema
 -- Run: psql $DATABASE_URL -f lib/schema.sql
 
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS uploads (
   id SERIAL PRIMARY KEY,
   filename VARCHAR(255) NOT NULL,
