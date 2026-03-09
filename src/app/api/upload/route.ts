@@ -17,10 +17,12 @@ export async function POST(request: NextRequest) {
     const { deals, clients, closedSetsCount } = parseExcel(arrayBuffer);
     const buffer = Buffer.from(arrayBuffer);
 
-    await mkdir(UPLOAD_DIR, { recursive: true });
-    const filename = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const filepath = path.join(UPLOAD_DIR, filename);
-    await writeFile(filepath, buffer);
+    if (!process.env.VERCEL) {
+      await mkdir(UPLOAD_DIR, { recursive: true });
+      const filename = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const filepath = path.join(UPLOAD_DIR, filename);
+      await writeFile(filepath, buffer);
+    }
 
     const rows = await query<{ id: number }>(
       'INSERT INTO uploads (filename, file_size, closed_sets_count) VALUES ($1, $2, $3) RETURNING id',
