@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { calculateSetPnl } from '@/lib/set-pnl-calc';
+import { calculateSetPnl, type SetPnlRow } from '@/lib/set-pnl-calc';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     );
 
     const result = calculateSetPnl(
-      rows as import('@/lib/set-pnl-calc').SetPnlRow[],
+      rows as unknown as SetPnlRow[],
       closedSetsCount
     );
     return NextResponse.json(result);
