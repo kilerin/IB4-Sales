@@ -21,6 +21,11 @@ try {
   console.log('Users table ready');
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS type VARCHAR(100)`);
   console.log('Added type column to clients');
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS parent_group VARCHAR(100)`);
+  console.log('Added parent_group column to clients');
+  await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS le_we_pay VARCHAR(50)`);
+  await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS our_bank VARCHAR(50)`);
+  console.log('Added le_we_pay, our_bank columns to deals');
   await pool.query(`ALTER TABLE deals DROP COLUMN IF EXISTS type`);
   console.log('Dropped type column from deals (if existed)');
   console.log('Migration done.');

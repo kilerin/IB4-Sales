@@ -14,11 +14,17 @@ export interface ParsedDeal {
   fx: number | null;
   /** Индекс сета (1-based), группа сделок между пустыми строками */
   set_id: number;
+  /** LE WE PAY — для Admin fee (VST) */
+  le_we_pay: string | null;
+  /** OUR BANK, колонка U — для Admin fee (CZB, CHZH) */
+  our_bank: string | null;
 }
 
 export interface ParsedClient {
   company_name: string;
   group: string | null;
+  /** Родительская группа: когда group = company_name (дочерняя компания), использовать parent_group */
+  parent_group: string | null;
   type: string | null;
   manager: string | null;
 }
@@ -37,6 +43,28 @@ function toDate(val: unknown): Date | null {
     if (d) return new Date(d.y, d.m - 1, d.d);
   }
   if (typeof val === 'string') {
+    const s = String(val).trim();
+    // yyyy-mm-dd (ISO, приоритет)
+    const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (iso) {
+      const [, y, m, d] = iso;
+      const date = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, parseInt(d!, 10));
+      if (!isNaN(date.getTime())) return date;
+    }
+    // dd.mm.yyyy or dd/mm/yyyy
+    const dmY = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+    if (dmY) {
+      const [, d, m, y] = dmY;
+      const date = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, parseInt(d!, 10));
+      if (!isNaN(date.getTime())) return date;
+    }
+    // mm/dd/yyyy (US)
+    const mDY = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mDY) {
+      const [, m, d, y] = mDY;
+      const date = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, parseInt(d!, 10));
+      if (!isNaN(date.getTime())) return date;
+    }
     const parsed = new Date(val);
     if (!isNaN(parsed.getTime())) return parsed;
   }
@@ -68,7 +96,9 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
     const header = (arr[0] ?? []) as unknown[];
     const statusIdx = header.findIndex((h) => String(h).toLowerCase().includes('status'));
     const sideIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('SIDE'));
-    const dateIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('DEAL DATE'));
+    const dateIdx = header.findIndex((h) => h && String(h).toUpperCase().replace(/\s/g, '') === 'DEALDATE');
+    const dateIdxAlt = header.findIndex((h) => h && String(h).toUpperCase().includes('DEAL') && String(h).toUpperCase().includes('DATE'));
+    const dateCol = dateIdx >= 0 ? dateIdx : dateIdxAlt >= 0 ? dateIdxAlt : 4;
     const vendorIdx = header.findIndex((h) => h && String(h).includes('VENDOR') && String(h).includes('SUPPLIER'));
     const idx = (fn: (h: unknown) => boolean, fallback: number) => {
       const i = header.findIndex(fn);
@@ -82,14 +112,18 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
       const s = String(h ?? '');
       return s.includes('AMOUNT TO BE RECEIVED') && s.includes('USD') && !s.includes('MANUAL') && !s.includes('FINAL') && !s.includes('CALCULATED');
     }, 46);
-    const marginIdx = idx((h) => {
-      const s = String(h ?? '');
-      return s.includes('TRADE CONTRACT MARGIN') && s.includes('USD') && !s.includes('MANUAL');
-    }, 49);
+    const normalizeHeader = (s: string) => s.replace(/\s+/g, ' ').replace(/\u00A0/g, ' ').trim();
+    const marginIdx = header.findIndex(
+      (h) => h && normalizeHeader(String(h)) === 'TRADE CONTRACT MARGIN USD'
+    );
+    const marginCol = marginIdx >= 0 ? marginIdx : 49; // fallback: column AX
     const pctMarginIdx = header.findIndex((h) => String(h ?? '').toUpperCase().includes('%MARGIN') || String(h ?? '').includes('% MARGIN'));
     const pctMarginCol = pctMarginIdx >= 0 ? pctMarginIdx : 25; // fallback: column Z
     const fxIdx = header.findIndex((h) => String(h ?? '').toUpperCase().includes('TOTAL FX TRADING PNL'));
     const fxCol = fxIdx >= 0 ? fxIdx : 65; // fallback: column BN
+    const leWePayIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('LE WE PAY'));
+    const ourBankIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('OUR BANK'));
+    const ourBankCol = ourBankIdx >= 0 ? ourBankIdx : 20; // column U
 
     let inSet = false;
     let currentSetId = 1;
@@ -100,6 +134,7 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
       const rowStr = row.map((c) => String(c ?? '')).join(' ');
       if (rowStr.includes('PIPELINE DELIMITER')) {
         if (inSet) closedSetsCount++;
+        inSet = false; // чтобы финальный if (inSet) после цикла не сработал
         break;
       }
 
@@ -121,14 +156,16 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
       const deal: ParsedDeal = {
         status,
         side,
-        deal_date: toDate(row[dateIdx]),
+        deal_date: toDate(row[dateCol]),
         vendor_supplier: vendor,
         amount_payed_usd: toNum(row[payedIdx]),
         amount_received_usd: toNum(row[receivedIdx]),
-        trade_contract_margin_usd: toNum(row[marginIdx]),
+        trade_contract_margin_usd: toNum(row[marginCol]),
         pct_margin: toNum(row[pctMarginCol]),
         fx: toNum(row[fxCol]),
         set_id: currentSetId,
+        le_we_pay: leWePayIdx >= 0 ? toString(row[leWePayIdx]) : null,
+        our_bank: toString(row[ourBankCol]),
       };
       deals.push(deal);
     }
@@ -141,6 +178,7 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
     const header = (arr[0] ?? []) as unknown[];
     const companyIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('COMPANY NAME'));
     const groupIdx = header.findIndex((h) => h && String(h).toUpperCase() === 'GROUP');
+    const parentGroupIdx = header.findIndex((h) => h && (String(h).toUpperCase() === 'PARENT GROUP' || String(h).toUpperCase() === 'PARENT'));
     const typeIdx = header.findIndex((h) => h && (String(h).toUpperCase() === 'TYPE' || String(h).toUpperCase().includes('DEAL TYPE')));
     const managerIdx = header.findIndex((h) => h && String(h).toUpperCase().includes('MANAGER'));
 
@@ -150,9 +188,10 @@ export function parseExcel(buffer: ArrayBuffer): ParseResult {
       const company = toString(row[companyIdx]);
       const manager = toString(row[managerIdx]);
       const group = toString(row[groupIdx]);
+      const parentGroup = parentGroupIdx >= 0 ? toString(row[parentGroupIdx]) : null;
       const type = typeIdx >= 0 ? toString(row[typeIdx]) : null;
       if (!company) continue;
-      clients.push({ company_name: company, group, type, manager });
+      clients.push({ company_name: company, group, parent_group: parentGroup, type, manager });
     }
   }
 

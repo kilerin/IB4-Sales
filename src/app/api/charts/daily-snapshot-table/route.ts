@@ -24,7 +24,11 @@ export async function GET(request: NextRequest) {
     const rows = await query<DailySnapshotRow>(`
       SELECT 
         COALESCE(d.manager, 'Unassigned') AS salesman,
-        c."group" AS "group",
+        CASE
+          WHEN c.parent_group IS NOT NULL AND c."group" IS NOT NULL AND UPPER(TRIM(COALESCE(c.company_name,''))) = UPPER(TRIM(COALESCE(c."group",''))) THEN c.parent_group
+          WHEN UPPER(TRIM(COALESCE(d.vendor_supplier,''))) = 'TAIGA' AND UPPER(TRIM(COALESCE(c.company_name,''))) = UPPER(TRIM(COALESCE(c."group",''))) THEN 'EVRAZ'
+          ELSE c."group"
+        END AS "group",
         d.vendor_supplier,
         COUNT(*)::text AS deals_count,
         COALESCE(SUM(d.amount_payed_usd), 0)::text AS amount_payed,
@@ -34,7 +38,7 @@ export async function GET(request: NextRequest) {
       LEFT JOIN clients c ON c.upload_id = d.upload_id
         AND UPPER(TRIM(c.company_name)) = UPPER(TRIM(d.vendor_supplier))
       WHERE d.upload_id = $1 AND d.deal_date = $2::date AND UPPER(TRIM(d.side)) = $3
-      GROUP BY d.manager, c."group", d.vendor_supplier
+      GROUP BY d.manager, d.vendor_supplier, c."group", c.parent_group, c.company_name
       ORDER BY salesman, "group", vendor_supplier
     `, [uploadId, date, side]);
 

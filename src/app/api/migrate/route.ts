@@ -12,6 +12,7 @@ export async function POST() {
       )
     `);
     await query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS type VARCHAR(100)`);
+    await query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS parent_group VARCHAR(100)`);
     await query(`ALTER TABLE deals DROP COLUMN IF EXISTS type`);
     return NextResponse.json({ ok: true, message: 'Migration applied' });
   } catch (e) {

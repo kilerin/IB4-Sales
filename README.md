@@ -63,6 +63,10 @@ npm run dev
   2. **SALES PERFORMANCE** — по каждому продавцу: сделок за день, суммы (Payed, Received, Margin)
   3. **Динамика по продавцу** — то же для выбранного продавца
 
+## Деплой на VPS
+
+См. [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md) — порт 3001, PM2, nginx, изоляция от других приложений и VPN.
+
 ## Деплой на Vercel
 
 1. Подключите репозиторий к Vercel

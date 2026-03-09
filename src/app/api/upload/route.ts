@@ -31,9 +31,9 @@ export async function POST(request: NextRequest) {
 
     for (const c of clients) {
       await query(
-        `INSERT INTO clients (upload_id, company_name, "group", type, manager) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (upload_id, company_name) DO UPDATE SET "group" = EXCLUDED."group", type = EXCLUDED.type, manager = EXCLUDED.manager`,
-        [uploadId, c.company_name, c.group ?? null, c.type ?? null, c.manager]
+        `INSERT INTO clients (upload_id, company_name, "group", parent_group, type, manager) VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (upload_id, company_name) DO UPDATE SET "group" = EXCLUDED."group", parent_group = EXCLUDED.parent_group, type = EXCLUDED.type, manager = EXCLUDED.manager`,
+        [uploadId, c.company_name, c.group ?? null, c.parent_group ?? null, c.type ?? null, c.manager]
       );
     }
 
@@ -47,9 +47,9 @@ export async function POST(request: NextRequest) {
     for (const d of dealsWithManager) {
       const dte = d.deal_date ? formatDateForDb(d.deal_date) : null;
       await query(
-        `INSERT INTO deals (upload_id, set_id, status, side, deal_date, vendor_supplier, amount_payed_usd, amount_received_usd, trade_contract_margin_usd, pct_margin, fx, manager)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [uploadId, d.set_id, d.status, d.side, dte, d.vendor_supplier, d.amount_payed_usd, d.amount_received_usd, d.trade_contract_margin_usd, d.pct_margin, d.fx, d.manager]
+        `INSERT INTO deals (upload_id, set_id, status, side, deal_date, vendor_supplier, amount_payed_usd, amount_received_usd, trade_contract_margin_usd, pct_margin, fx, manager, le_we_pay, our_bank)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [uploadId, d.set_id, d.status, d.side, dte, d.vendor_supplier, d.amount_payed_usd, d.amount_received_usd, d.trade_contract_margin_usd, d.pct_margin, d.fx, d.manager, d.le_we_pay ?? null, d.our_bank ?? null]
       );
     }
 

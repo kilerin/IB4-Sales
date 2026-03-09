@@ -5,12 +5,15 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "start": "next start",
     "lint": "eslint",
     "db:init": "psql $DATABASE_URL -f src/lib/schema.sql",
     "db:migrate": "node --env-file=.env scripts/migrate.mjs",
     "db:clear": "node scripts/clear-db.mjs",
-    "db:create-user": "node --env-file=.env scripts/create-user.mjs"
+    "db:create-user": "node --env-file=.env scripts/create-user.mjs",
+    "start:prod": "PORT=3001 next start"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -23,6 +26,8 @@
     "xlsx": "^0.18"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vitest": "^3.2.4",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",

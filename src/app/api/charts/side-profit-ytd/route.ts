@@ -94,6 +94,7 @@ export async function GET(request: NextRequest) {
         d.trade_contract_margin_usd,
         d.fx,
         c."group",
+        c.parent_group,
         c.type
       FROM deals d
       LEFT JOIN clients c ON c.upload_id = d.upload_id
@@ -105,6 +106,18 @@ export async function GET(request: NextRequest) {
         AND UPPER(TRIM(d.side)) IN ('EXPORT', 'FOREX', 'AGENT')`,
       [uploadId, dateFrom, dateTo]
     );
+
+    const SUBSIDIARY_TO_PARENT: Record<string, string> = { TAIGA: 'EVRAZ' };
+    const resolveGroup = (r: Record<string, unknown>): { group: string | null; groupKey: string } => {
+      const group = r.group != null ? String(r.group).trim() || null : null;
+      const parentGroup = r.parent_group != null ? String(r.parent_group).trim() || null : null;
+      const vendor = r.vendor_supplier != null ? String(r.vendor_supplier).trim() : '';
+      let resolved = group;
+      if (group && vendor && group.toUpperCase() === vendor.toUpperCase()) {
+        resolved = parentGroup ?? SUBSIDIARY_TO_PARENT[vendor.toUpperCase()] ?? group;
+      }
+      return { group: resolved, groupKey: resolved ?? '—' };
+    };
 
     const sideData = new Map<string, Map<string, Map<string, GroupData>>>();
 
@@ -119,8 +132,7 @@ export async function GET(request: NextRequest) {
       const margin = Number(r.trade_contract_margin_usd) || 0;
       const dealDate = r.deal_date ? String(r.deal_date).slice(0, 10) : null;
       const vendorSupplier = String(r.vendor_supplier ?? '').trim() || '—';
-      const group = r.group != null ? String(r.group).trim() || null : null;
-      const groupKey = group ?? '—';
+      const { group, groupKey } = resolveGroup(r);
       const fx = r.fx != null ? Number(r.fx) : null;
 
       const volume = received !== 0 ? received : payed;

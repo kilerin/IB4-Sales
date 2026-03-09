@@ -53,7 +53,8 @@ export async function GET(request: NextRequest) {
         d.trade_contract_margin_usd,
         d.pct_margin,
         d.fx,
-        c."group"
+        c."group",
+        c.parent_group
       FROM deals d
       LEFT JOIN clients c ON c.upload_id = d.upload_id
         AND UPPER(TRIM(c.company_name)) = UPPER(TRIM(d.vendor_supplier))
@@ -63,6 +64,18 @@ export async function GET(request: NextRequest) {
         AND d.deal_date <= $3::date`,
       [uploadId, dateFrom, dateTo]
     );
+
+    const SUBSIDIARY_TO_PARENT: Record<string, string> = { TAIGA: 'EVRAZ' };
+    const resolveGroup = (r: Record<string, unknown>): { group: string | null; groupKey: string } => {
+      const group = r.group != null ? String(r.group).trim() || null : null;
+      const parentGroup = r.parent_group != null ? String(r.parent_group).trim() || null : null;
+      const vendor = r.vendor_supplier != null ? String(r.vendor_supplier).trim() : '';
+      let resolved = group;
+      if (group && vendor && group.toUpperCase() === vendor.toUpperCase()) {
+        resolved = parentGroup ?? SUBSIDIARY_TO_PARENT[vendor.toUpperCase()] ?? group;
+      }
+      return { group: resolved, groupKey: resolved ?? '—' };
+    };
 
     const setImportTotal = new Map<number, number>();
     const setExportAgentBrokerMargin = new Map<number, number>();
@@ -105,8 +118,7 @@ export async function GET(request: NextRequest) {
       const setId = Number(r.set_id) || 0;
       const dealDate = r.deal_date ? String(r.deal_date).slice(0, 10) : null;
       const vendorSupplier = String(r.vendor_supplier ?? '').trim() || '—';
-      const group = r.group != null ? String(r.group).trim() || null : null;
-      const groupKey = group ?? '—';
+      const { group, groupKey } = resolveGroup(r);
       const pctMargin = received !== 0 ? (margin / received) * 100 : null;
       const fx = r.fx != null ? Number(r.fx) : null;
 

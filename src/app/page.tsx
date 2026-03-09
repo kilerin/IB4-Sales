@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Fragment } from 'react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import { signOut } from 'next-auth/react';
 import * as XLSX from 'xlsx';
 import {
@@ -78,16 +78,127 @@ export default function Dashboard() {
     { group: string | null; importVolume: number; pctMargin: number | null; margin: number; fundingCost: number; infrastructureCost: number; dealProfit: number; pctProfit: number | null; fx: number; deals: Array<{ group: string | null; vendor_supplier: string; deal_date: string | null; importVolume: number; margin: number; pctMargin: number | null; fundingCost: number; dealProfit: number; pctProfit: number | null; fx: number | null }> }[]
   >([]);
   const [expandedGroupProfit, setExpandedGroupProfit] = useState<Set<string>>(new Set());
-  const [groupProfitSort, setGroupProfitSort] = useState<{ column: 'importVolume' | 'margin'; dir: 'asc' | 'desc' } | null>(null);
+  const [groupProfitSort, setGroupProfitSort] = useState<{ column: 'importVolume' | 'margin' | 'dealProfit' | 'pctProfit'; dir: 'asc' | 'desc' } | null>(null);
   const [groupProfitMonth, setGroupProfitMonth] = useState<string>('full');
   const [groupProfitMonths, setGroupProfitMonths] = useState<string[]>([]);
   const [managerProfitPeriod, setManagerProfitPeriod] = useState<'lastDay' | 'month' | 'quarter' | 'ytd'>('ytd');
+  const [importExportPivot, setImportExportPivot] = useState<{
+    rows: Array<{ salesman: string; client: string; deal_date: string | null; amount_received_usd: number; set_id: number; exportGroups: Record<string, number> }>;
+    exportGroupColumns: string[];
+  }>({ rows: [], exportGroupColumns: [] });
+  const [exportBySalesman, setExportBySalesman] = useState<
+    { rows: Array<{ salesman: string; exportVolume: number; pctOfTotal: number }>; totalExport: number }
+  >({ rows: [], totalExport: 0 });
+  const [setPnl, setSetPnl] = useState<{
+    sets: Array<Record<string, number | string | null>>;
+    setIds: number[];
+    firstSet: number;
+    lastSet: number;
+  }>({ sets: [], setIds: [], firstSet: 0, lastSet: 0 });
+  const [setPnlGroupBy, setSetPnlGroupBy] = useState<'day' | 'week' | 'month' | 'quarter'>('day');
   const [totalMargin, setTotalMargin] = useState<number>(0);
   const [nonImportMargin, setNonImportMargin] = useState<number>(0);
   const [nonImportFx, setNonImportFx] = useState<number>(0);
   const [totalFx, setTotalFx] = useState<number>(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+
+  const setPnlGroupedColumns = useMemo(() => {
+    if (setPnl.sets.length === 0) return [];
+    const metricKeys = ['importProfit', 'importLoss', 'exportProfit', 'exportCost', 'loan', 'totalSales', 'fxImport', 'fxExport', 'fxPosition', 'fxForex', 'fxOther', 'totalFx', 'brokerFxProfit', 'brokerFxCost', 'agent', 'totalInfraCost', 'opex', 'grandTotal'] as const;
+    const getGroupKey = (dateStr: string | null, groupBy: typeof setPnlGroupBy): string => {
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return 'unknown';
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      if (groupBy === 'day') return dateStr;
+      if (groupBy === 'week') {
+        // ISO 8601: week 1 = week containing Jan 4; use Thursday of that week as reference
+        const d = new Date(date.getTime());
+        d.setHours(0, 0, 0, 0);
+        const day = d.getDay() || 7; // 1=Mon .. 7=Sun
+        d.setDate(d.getDate() + 4 - day); // Thursday of this week
+        const jan4 = new Date(d.getFullYear(), 0, 4);
+        jan4.setHours(0, 0, 0, 0);
+        const jan4Day = jan4.getDay() || 7;
+        jan4.setDate(jan4.getDate() + 4 - jan4Day); // Thursday of week 1
+        const weekNum = 1 + Math.floor((d.getTime() - jan4.getTime()) / 86400000 / 7);
+        const isoYear = d.getFullYear();
+        return `${isoYear}-W${String(Math.max(1, weekNum)).padStart(2, '0')}`;
+      }
+      if (groupBy === 'month') return `${y}-${String(m).padStart(2, '0')}`;
+      if (groupBy === 'quarter') return `${y}-Q${Math.ceil(m / 3)}`;
+      return dateStr;
+    };
+    const formatGroupLabel = (groupKey: string, groupBy: typeof setPnlGroupBy): string => {
+      if (groupBy === 'day') {
+        const [y, m, d] = groupKey.split('-').map(Number);
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return `${String(d).padStart(2, '0')}.${months[(m ?? 1) - 1] ?? 'Jan'}`;
+      }
+      if (groupBy === 'week') return groupKey.replace('-W', ' W');
+      if (groupBy === 'month') {
+        const [y, m] = groupKey.split('-');
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return `${months[parseInt(m ?? '1', 10) - 1] ?? 'Jan'} ${y}`;
+      }
+      if (groupBy === 'quarter') return groupKey.replace('-', ' ');
+      return groupKey;
+    };
+    if (setPnlGroupBy === 'day') {
+      return setPnl.setIds.map((sid) => {
+        const s = setPnl.sets.find((x) => x.set_id === sid);
+        const data: Record<string, number> = {};
+        for (const k of metricKeys) {
+          const v = s?.[k];
+          data[k] = typeof v === 'number' ? v : 0;
+        }
+        return {
+          groupKey: String(sid),
+          label: (s?.dateLabel as string) ?? `Set ${sid}`,
+          setIds: [sid],
+          data,
+        };
+      });
+    }
+    const groups = new Map<string, { setIds: number[]; data: Record<string, number> }>();
+    for (const sid of setPnl.setIds) {
+      const s = setPnl.sets.find((x) => x.set_id === sid);
+      const dateForGroup = (s?.dateMin as string) ?? (s?.dateMax as string) ?? null;
+      const groupKey = getGroupKey(dateForGroup, setPnlGroupBy);
+      let g = groups.get(groupKey);
+      if (!g) {
+        g = { setIds: [], data: Object.fromEntries(metricKeys.map((k) => [k, 0])) };
+        groups.set(groupKey, g);
+      }
+      g.setIds.push(sid);
+      for (const k of metricKeys) {
+        const v = s?.[k];
+        g.data[k] += typeof v === 'number' ? v : 0;
+      }
+    }
+    const sortedKeys = [...groups.keys()].sort((a, b) => {
+      if (setPnlGroupBy === 'week') {
+        const parse = (k: string): [number, number] => {
+          const m = k.match(/^(\d{4})-W(\d{1,2})$/);
+          return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
+        };
+        const [ay, aw] = parse(a);
+        const [by, bw] = parse(b);
+        if (ay !== by) return by - ay;
+        return bw - aw;
+      }
+      return b.localeCompare(a);
+    });
+    return sortedKeys.map((groupKey) => {
+      const g = groups.get(groupKey)!;
+      return {
+        groupKey,
+        label: formatGroupLabel(groupKey, setPnlGroupBy),
+        setIds: g.setIds,
+        data: g.data,
+      };
+    });
+  }, [setPnl, setPnlGroupBy]);
 
   const fetchUploads = async () => {
     const res = await fetch('/api/uploads');
@@ -176,7 +287,60 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!selectedUploadId) return;
+    fetch(`/api/charts/import-export-pivot?uploadId=${selectedUploadId}&period=${managerProfitPeriod}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (res && typeof res === 'object' && Array.isArray(res.rows)) {
+          setImportExportPivot({
+            rows: res.rows,
+            exportGroupColumns: Array.isArray(res.exportGroupColumns) ? res.exportGroupColumns : [],
+          });
+        } else {
+          setImportExportPivot({ rows: [], exportGroupColumns: [] });
+        }
+      })
+      .catch(() => setImportExportPivot({ rows: [], exportGroupColumns: [] }));
+  }, [selectedUploadId, managerProfitPeriod]);
+
+  useEffect(() => {
+    if (!selectedUploadId) return;
+    fetch(`/api/charts/export-by-salesman?uploadId=${selectedUploadId}&period=${managerProfitPeriod}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (res && typeof res === 'object' && Array.isArray(res.rows)) {
+          setExportBySalesman({
+            rows: res.rows,
+            totalExport: res.totalExport ?? 0,
+          });
+        } else {
+          setExportBySalesman({ rows: [], totalExport: 0 });
+        }
+      })
+      .catch(() => setExportBySalesman({ rows: [], totalExport: 0 }));
+  }, [selectedUploadId, managerProfitPeriod]);
+
+  useEffect(() => {
+    if (!selectedUploadId) return;
     setGroupProfitMonth('full');
+  }, [selectedUploadId]);
+
+  useEffect(() => {
+    if (!selectedUploadId) return;
+    fetch(`/api/charts/set-pnl?uploadId=${selectedUploadId}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (res && typeof res === 'object' && Array.isArray(res.sets)) {
+          setSetPnl({
+            sets: res.sets,
+            setIds: Array.isArray(res.setIds) ? res.setIds : res.sets.map((s: { set_id: number }) => s.set_id),
+            firstSet: res.firstSet ?? res.setIds?.[0] ?? 0,
+            lastSet: res.lastSet ?? res.setIds?.[res.setIds?.length - 1] ?? 0,
+          });
+        } else {
+          setSetPnl({ sets: [], setIds: [], firstSet: 0, lastSet: 0 });
+        }
+      })
+      .catch(() => setSetPnl({ sets: [], setIds: [], firstSet: 0, lastSet: 0 }));
   }, [selectedUploadId]);
 
   useEffect(() => {
@@ -329,8 +493,8 @@ export default function Dashboard() {
     }
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, 'Прибыль по продавцам YTD');
-    XLSX.writeFile(wb, 'Прибыль по продавцам YTD.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'SALESMEN');
+    XLSX.writeFile(wb, 'SALESMEN.xlsx');
   };
 
   const exportSideProfitYtdToExcel = () => {
@@ -407,16 +571,18 @@ export default function Dashboard() {
       const totalFunding = groupProfitYtd.reduce((s, r) => s + r.fundingCost, 0);
       const totalProfit = groupProfitYtd.reduce((s, r) => s + r.dealProfit, 0);
       const totalFx = groupProfitYtd.reduce((s, r) => s + r.fx, 0);
+      const grandPctMargin = totalImport !== 0 ? (totalMargin / totalImport) * 100 : null;
+      const grandPctProfit = totalImport !== 0 ? (totalProfit / totalImport) * 100 : null;
       rows.push([
         'Grand Total',
         '',
         totalImport,
         totalMargin,
-        null,
+        grandPctMargin,
         totalFunding,
         null,
         totalProfit,
-        null,
+        grandPctProfit,
         totalFx,
       ]);
     }
@@ -507,6 +673,87 @@ export default function Dashboard() {
               {uploads.find((u) => u.id === selectedUploadId)?.closed_sets_count ?? '—'}
             </div>
           </div>
+
+          {setPnl.sets.length > 0 && (
+            <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700">
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
+                <h2 className="text-lg font-semibold text-amber-300">SET P&L</h2>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex gap-1">
+                    {(['day', 'week', 'month', 'quarter'] as const).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setSetPnlGroupBy(g)}
+                      className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                        setPnlGroupBy === g
+                          ? 'bg-amber-500 text-slate-900'
+                          : 'bg-slate-700/60 text-slate-300 hover:bg-slate-600'
+                      }`}
+                    >
+                      {g === 'day' ? 'Дни' : g === 'week' ? 'Недели' : g === 'month' ? 'Месяцы' : 'Кварталы'}
+                    </button>
+                  ))}
+                  </div>
+                </div>
+              </div>
+              <p className="text-slate-400 text-xs mb-4">Сеты до PIPELINE DELIMITER, Status ≠ CANCELLED. Колонки — {setPnlGroupBy === 'day' ? `сеты ${setPnl.firstSet}-${setPnl.lastSet}` : `свёрнуто по ${setPnlGroupBy === 'week' ? 'неделям' : setPnlGroupBy === 'month' ? 'месяцам' : 'кварталам'}`}.</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-600">
+                      <th className="text-left py-2 pr-4 text-slate-400 font-medium min-w-[180px]">Метрика</th>
+                      {setPnlGroupedColumns.map((col) => (
+                        <th key={col.groupKey} className="text-right py-2 px-2 text-slate-400 font-medium min-w-[90px]">
+                          <span className="block text-slate-300">{col.label}</span>
+                          <span className="block text-xs text-slate-500">
+                            {col.setIds.length > 1 ? `Set ${col.setIds.join(', ')}` : `Set ${col.setIds[0]}`}
+                          </span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: 'importProfit', label: '1. Import Profit', bold: false },
+                      { key: 'importLoss', label: '2. Import Loss', bold: false },
+                      { key: 'exportProfit', label: '3. Export Profit', bold: false },
+                      { key: 'exportCost', label: '4. Export Cost', bold: false },
+                      { key: 'loan', label: '5. Loan (+ or -)', bold: false },
+                      { key: 'totalSales', label: '6. Total SALES', bold: true },
+                      { key: 'fxImport', label: '7. FX Import', bold: false },
+                      { key: 'fxExport', label: '8. FX Export', bold: false },
+                      { key: 'fxPosition', label: '9. FX Position', bold: false },
+                      { key: 'fxForex', label: '10. FX Forex', bold: false },
+                      { key: 'fxOther', label: '11. FX Other (agent, loan)', bold: false },
+                      { key: 'totalFx', label: '12. Total FX', bold: true },
+                      { key: 'brokerFxProfit', label: '13. Broker FX profit', bold: false },
+                      { key: 'brokerFxCost', label: '14. Broker FX cost', bold: false },
+                      { key: 'agent', label: '15. Agent', bold: false },
+                      { key: 'totalInfraCost', label: '16. Total infrastructure cost', bold: true },
+                      { key: 'opex', label: '17. OPEX', bold: false },
+                      { key: 'grandTotal', label: '18. Grand Total', bold: true },
+                    ].map(({ key, label, bold }) => (
+                      <tr
+                        key={key}
+                        className={`border-b border-slate-700/50 hover:bg-slate-700/30 ${bold ? 'font-bold bg-amber-900/20' : ''}`}
+                      >
+                        <td className={`py-2 pr-4 ${bold ? 'text-amber-200' : 'text-slate-300'}`}>{label}</td>
+                        {setPnlGroupedColumns.map((col) => {
+                          const num = col.data[key] ?? 0;
+                          return (
+                            <td key={col.groupKey} className={`text-right py-2 px-2 ${moneyColor(num)}`}>
+                              {num !== 0 ? formatMoney(num) : '—'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700">
             <h2 className="text-lg font-semibold text-amber-300 mb-2">TRADE CONTRACT MARGIN USD по SIDE</h2>
@@ -651,7 +898,7 @@ export default function Dashboard() {
 
           <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
-              <h2 className="text-lg font-semibold text-amber-300">Прибыль по продавцам YTD</h2>
+              <h2 className="text-lg font-semibold text-amber-300">SALESMEN</h2>
               <div className="flex items-center gap-3">
                 <div className="flex gap-1">
                   {(['lastDay', 'month', 'quarter', 'ytd'] as const).map((p) => (
@@ -897,7 +1144,7 @@ export default function Dashboard() {
                 </button>
               </div>
             </div>
-            <p className="text-slate-400 text-xs mb-4">Объём импорта, TRADE CONTRACT MARGIN, FUNDING COST, DEAL PROFIT по группам. Первый столбец — GROUP. Кликните по заголовку IMPORT, USD или CONTRACT MARGIN для сортировки.</p>
+            <p className="text-slate-400 text-xs mb-4">Объём импорта, TRADE CONTRACT MARGIN, FUNDING COST, DEAL PROFIT по группам. Первый столбец — GROUP. Кликните по заголовку IMPORT, USD, CONTRACT MARGIN, DEAL PROFIT или %PROFIT для сортировки.</p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -939,8 +1186,38 @@ export default function Dashboard() {
                     <th className="text-right py-2 px-2 text-slate-400 font-medium">%CONTRACT MARGIN<HelpIcon text="(CONTRACT MARGIN / IMPORT, USD) × 100" /></th>
                     <th className="text-right py-2 px-2 text-slate-400 font-medium">FUNDING COST<HelpIcon text="(amount_received / set_import_total) × set_export_agent_forex_margin — доля маржи EXPORT/AGENT/FOREX сета" /></th>
                     <th className="text-right py-2 px-2 text-slate-400 font-medium">INFRASTRUCTURE COST<HelpIcon text="Инфраструктурные расходы (сейчас = 0)" /></th>
-                    <th className="text-right py-2 px-2 text-slate-400 font-medium">DEAL PROFIT<HelpIcon text="CONTRACT MARGIN + FUNDING COST + INFRASTRUCTURE COST" /></th>
-                    <th className="text-right py-2 pl-4 text-slate-400 font-medium">%PROFIT<HelpIcon text="(DEAL PROFIT / IMPORT, USD) × 100" /></th>
+                    <th
+                      className="text-right py-2 px-2 text-slate-400 font-medium cursor-pointer hover:text-amber-400 select-none"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGroupProfitSort((prev) => {
+                          if (prev?.column === 'dealProfit') return { column: 'dealProfit', dir: prev.dir === 'desc' ? 'asc' : 'desc' };
+                          return { column: 'dealProfit', dir: 'desc' };
+                        });
+                      }}
+                    >
+                      DEAL PROFIT
+                      {groupProfitSort?.column === 'dealProfit' && (
+                        <span className="ml-1 text-amber-400">{groupProfitSort.dir === 'desc' ? '▼' : '▲'}</span>
+                      )}
+                      <HelpIcon text="CONTRACT MARGIN + FUNDING COST + INFRASTRUCTURE COST" />
+                    </th>
+                    <th
+                      className="text-right py-2 pl-4 text-slate-400 font-medium cursor-pointer hover:text-amber-400 select-none"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGroupProfitSort((prev) => {
+                          if (prev?.column === 'pctProfit') return { column: 'pctProfit', dir: prev.dir === 'desc' ? 'asc' : 'desc' };
+                          return { column: 'pctProfit', dir: 'desc' };
+                        });
+                      }}
+                    >
+                      %PROFIT
+                      {groupProfitSort?.column === 'pctProfit' && (
+                        <span className="ml-1 text-amber-400">{groupProfitSort.dir === 'desc' ? '▼' : '▲'}</span>
+                      )}
+                      <HelpIcon text="(DEAL PROFIT / IMPORT, USD) × 100" />
+                    </th>
                     <th className="text-right py-2 pl-4 text-slate-400 font-medium">IMPORT FX<HelpIcon text="TOTAL FX TRADING PNL USD из колонки BN Excel" /></th>
                   </tr>
                 </thead>
@@ -954,8 +1231,8 @@ export default function Dashboard() {
                     .sort((a, b) => {
                       if (!groupProfitSort) return 0;
                       const col = groupProfitSort.column;
-                      const va = a[col];
-                      const vb = b[col];
+                      const va = (a[col] ?? 0) as number;
+                      const vb = (b[col] ?? 0) as number;
                       const cmp = va - vb;
                       return groupProfitSort.dir === 'desc' ? -cmp : cmp;
                     })
@@ -1019,30 +1296,41 @@ export default function Dashboard() {
                       </Fragment>
                     );
                   })}
-                  {groupProfitYtd.length > 0 && (
+                  {groupProfitYtd.length > 0 && (() => {
+                    const grandImport = groupProfitYtd.reduce((s, r) => s + r.importVolume, 0);
+                    const grandMargin = groupProfitYtd.reduce((s, r) => s + r.margin, 0);
+                    const grandProfit = groupProfitYtd.reduce((s, r) => s + r.dealProfit, 0);
+                    const grandPctMargin = grandImport !== 0 ? (grandMargin / grandImport) * 100 : null;
+                    const grandPctProfit = grandImport !== 0 ? (grandProfit / grandImport) * 100 : null;
+                    return (
                     <tr className="border-t-2 border-slate-600 bg-amber-900/30 font-bold text-amber-200">
                       <td className="py-2 pr-4">Grand Total</td>
                       <td className="py-2 px-2">—</td>
                       <td className="text-right py-2 px-2">
-                        {formatMoney(groupProfitYtd.reduce((s, r) => s + r.importVolume, 0))}
+                        {formatMoney(grandImport)}
                       </td>
-                      <td className={`text-right py-2 px-2 ${moneyColor(groupProfitYtd.reduce((s, r) => s + r.margin, 0))}`}>
-                        {formatMoney(groupProfitYtd.reduce((s, r) => s + r.margin, 0))}
+                      <td className={`text-right py-2 px-2 ${moneyColor(grandMargin)}`}>
+                        {formatMoney(grandMargin)}
                       </td>
-                      <td className="text-right py-2 px-2 text-slate-400">—</td>
+                      <td className="text-right py-2 px-2">
+                        {grandPctMargin != null ? `${grandPctMargin.toFixed(2)}%` : '—'}
+                      </td>
                       <td className={`text-right py-2 px-2 ${moneyColor(groupProfitYtd.reduce((s, r) => s + r.fundingCost, 0))}`}>
                         {formatMoney(groupProfitYtd.reduce((s, r) => s + r.fundingCost, 0))}
                       </td>
                       <td className="text-right py-2 px-2 text-slate-500">—</td>
-                      <td className={`text-right py-2 px-2 ${moneyColor(groupProfitYtd.reduce((s, r) => s + r.dealProfit, 0))}`}>
-                        {formatMoney(groupProfitYtd.reduce((s, r) => s + r.dealProfit, 0))}
+                      <td className={`text-right py-2 px-2 ${moneyColor(grandProfit)}`}>
+                        {formatMoney(grandProfit)}
                       </td>
-                      <td className="text-right py-2 pl-4 text-slate-400">—</td>
+                      <td className="text-right py-2 pl-4">
+                        {grandPctProfit != null ? `${grandPctProfit.toFixed(2)}%` : '—'}
+                      </td>
                       <td className={`text-right py-2 pl-4 ${moneyColor(groupProfitYtd.reduce((s, r) => s + r.fx, 0))}`}>
                         {formatMoney(groupProfitYtd.reduce((s, r) => s + r.fx, 0))}
                       </td>
                     </tr>
-                  )}
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1281,6 +1569,79 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+
+            {exportBySalesman.rows.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-base font-semibold text-amber-200 mb-2">Экспорт по продавцам</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-600">
+                        <th className="text-left py-2 pr-4 text-slate-400 font-medium">Продавец</th>
+                        <th className="text-right py-2 px-2 text-slate-400 font-medium">Сумма экспорта, USD</th>
+                        <th className="text-right py-2 pl-4 text-slate-400 font-medium">% от общего экспорта</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exportBySalesman.rows.map((row, i) => (
+                        <tr key={i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                          <td className="py-2 pr-4">{row.salesman}</td>
+                          <td className="text-right py-2 px-2">{formatMoney(row.exportVolume)}</td>
+                          <td className="text-right py-2 pl-4">{row.pctOfTotal.toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t-2 border-slate-600 bg-amber-900/30 font-bold text-amber-200">
+                        <td className="py-2 pr-4">Итого</td>
+                        <td className="text-right py-2 px-2">{formatMoney(exportBySalesman.totalExport)}</td>
+                        <td className="text-right py-2 pl-4">100.00%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {importExportPivot.rows.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-base font-semibold text-amber-200 mb-2">Сводная: импорт → экспорт по сетам</h3>
+                <p className="text-slate-400 text-xs mb-3">Слева — импорт (продавец, клиент с датой, amount_received_usd). Колонки — группы EXPORT из справочника CLIENTS (не названия компаний). Если в сете несколько экспортёров из одной группы — их % суммируются.</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-600">
+                        <th className="text-left py-2 pr-4 text-slate-400 font-medium">Продавец</th>
+                        <th className="text-left py-2 px-2 text-slate-400 font-medium">Клиент</th>
+                        <th className="text-right py-2 px-2 text-slate-400 font-medium">amount_received_usd</th>
+                        {importExportPivot.exportGroupColumns.map((g) => (
+                          <th key={g} className="text-right py-2 px-2 text-slate-400 font-medium" title="Группа EXPORT">
+                            {g}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importExportPivot.rows.map((row, i) => (
+                        <tr key={i} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                          <td className="py-2 pr-4">{row.salesman}</td>
+                          <td className="py-2 px-2">
+                            {row.client}
+                            {row.deal_date ? ` (${row.deal_date})` : ''}
+                          </td>
+                          <td className="text-right py-2 px-2">{formatMoney(row.amount_received_usd)}</td>
+                          {importExportPivot.exportGroupColumns.map((g) => (
+                            <td key={g} className="text-right py-2 px-2">
+                              {row.exportGroups[g] != null && row.exportGroups[g] > 0
+                                ? `${row.exportGroups[g].toFixed(2)}%`
+                                : '—'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-4 mt-6">
